@@ -37,6 +37,7 @@ function normalizeItem(item) {
   const categories = Array.isArray(item.categories)
     ? item.categories.map((c) => (typeof c === "string" ? c : c?.term || "")).filter(Boolean)
     : [];
+  const board = categories[0] || ""; // NodeSeek 每条帖子一个板块
   const author = item.creator || item.author || "";
   const pubDate = item.pubDate || item.isoDate || "";
   const pubTs = parseDate(pubDate);
@@ -47,6 +48,7 @@ function normalizeItem(item) {
     content,
     snippet: truncate(content, 280),
     categories,
+    board,
     author,
     pubDate,
     pubTs,
@@ -83,8 +85,12 @@ export async function fetchFeed(url, { userAgent, cookie }) {
   }
   const feed = await parser.parseString(xml);
   const items = (feed.items || []).map(normalizeItem).filter((i) => i.guid);
-  log.debug(`fetched ${items.length} items from ${url}`);
-  return items;
+  // channel 级 <category> 即全部板块列表
+  const boards = Array.isArray(feed.categories)
+    ? feed.categories.map((c) => (typeof c === "string" ? c : c?.term || "")).filter(Boolean)
+    : [];
+  log.debug(`fetched ${items.length} items, ${boards.length} boards from ${url}`);
+  return { items, boards };
 }
 
 /**
@@ -93,10 +99,16 @@ export async function fetchFeed(url, { userAgent, cookie }) {
 export async function fetchAllFeeds(feeds, opts) {
   const results = await Promise.allSettled(feeds.map((u) => fetchFeed(u, opts)));
   const all = [];
+  const allBoards = new Set();
   for (let i = 0; i < results.length; i++) {
     const r = results[i];
     if (r.status === "fulfilled") {
-      all.push(...r.value);
+      all.push(...r.value.items);
+      for (const b of r.value.boards) allBoards.add(b);
+      // 同时从 item 级 categories 收集板块（RSS channel 无 category 时仍可发现）
+      for (const it of r.value.items) {
+        if (it.board) allBoards.add(it.board);
+      }
     } else {
       log.warn(`抓取失败 ${feeds[i]}: ${r.reason?.message || r.reason}`);
     }
@@ -112,7 +124,7 @@ export async function fetchAllFeeds(feeds, opts) {
   }
   // 按时间倒序；无时间的排到最后
   deduped.sort((a, b) => (b.pubTs || 0) - (a.pubTs || 0));
-  return deduped;
+  return { items: deduped, boards: [...allBoards] };
 }
 
 /** 供匹配使用的全文文本（标题 + 摘要 + 分类）。 */

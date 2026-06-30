@@ -1,7 +1,8 @@
-import { Bot } from "grammy";
+import { Bot, InlineKeyboard } from "grammy";
 import { log } from "./logger.js";
 import { fetchAllFeeds, itemMatchText } from "./rss.js";
 import { compileKeywords, matchText } from "./matcher.js";
+import { getBoards, boardLabel, setDiscoveredBoards } from "./boards.js";
 
 const SLEEP_MS = 60; // 推送间间隔，规避 Telegram 限流
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -19,6 +20,24 @@ function arg(ctx) {
   return sp === -1 ? "" : text.slice(sp + 1).trim();
 }
 
+/** 构建板块选择 inline 键盘 */
+function buildBoardKeyboard(kwId, boardsStr, boardList) {
+  const selected =
+    boardsStr === "*"
+      ? new Set(boardList.map((b) => b.slug))
+      : new Set(boardsStr.split(",").filter(Boolean));
+  const kb = new InlineKeyboard();
+  boardList.forEach((b, i) => {
+    const mark = selected.has(b.slug) ? "✅" : "⬜";
+    kb.add({ text: `${mark} ${b.label}`, callback_data: `bd:${kwId}:${b.slug}` });
+    if ((i + 1) % 3 === 0) kb.row();
+  });
+  kb.row();
+  kb.add({ text: "🌐 全选", callback_data: `bd:${kwId}:all` });
+  kb.add({ text: "✅ 完成", callback_data: `bd:${kwId}:done` });
+  return kb;
+}
+
 const HELP_TEXT = `🛰 <b>NSRadar — NodeSeek RSS 监控</b>
 
 <b>关键词语法</b>
@@ -27,10 +46,16 @@ const HELP_TEXT = `🛰 <b>NSRadar — NodeSeek RSS 监控</b>
 • 排除词：以 <code>-</code> 开头，如 <code>-广告</code> / <code>-re:推广</code>
 • 仅设置排除词时：除排除项外全部推送
 
+<b>板块选择</b>
+• 添加关键词后会弹出板块选择菜单
+• 可多选板块，或点「全选」监控所有板块
+• /boards 查看全部可用板块
+
 <b>命令</b>
-/add &lt;关键词&gt; — 添加关键词
+/add &lt;关键词&gt; — 添加关键词（后选板块）
 /del &lt;关键词&gt; — 删除关键词
-/list — 查看我的关键词
+/list — 查看关键词（含板块与命中次数）
+/boards — 查看全部板块
 /pause — 暂停推送
 /resume — 恢复推送
 /status — 运行状态
@@ -93,11 +118,17 @@ export function createRuntime(config, store) {
       await ctx.reply("关键词过长（≤200 字符）。");
       return;
     }
-    const added = store.addKeyword(ctx.from.id, kw);
+    const kwId = store.addKeyword(ctx.from.id, kw);
     const total = store.countKeywords(ctx.from.id);
+    if (kwId === null) {
+      await ctx.reply(`⚠️ 该关键词已存在（当前共 ${total} 个）`, { parse_mode: "HTML" });
+      return;
+    }
+    // 弹出板块选择菜单（默认全部）
+    const kb = buildBoardKeyboard(kwId, "*", getBoards());
     await ctx.reply(
-      added ? `✅ 已添加关键词 <code>${escapeHtml(kw)}</code>（当前共 ${total} 个）` : `⚠️ 该关键词已存在（当前共 ${total} 个）`,
-      { parse_mode: "HTML" },
+      `✅ 已添加关键词 <code>${escapeHtml(kw)}</code>（共 ${total} 个）\n\n请选择监控板块（默认全部）：`,
+      { parse_mode: "HTML", reply_markup: kb },
     );
   });
 
@@ -116,13 +147,31 @@ export function createRuntime(config, store) {
   });
 
   bot.command("list", async (ctx) => {
-    const kws = store.listKeywords(ctx.from.id);
+    const kws = store.listKeywordsWithStats(ctx.from.id);
     if (!kws.length) {
       await ctx.reply("你还没有关键词。使用 /add 添加。");
       return;
     }
-    const body = kws.map((k, i) => `${i + 1}. <code>${escapeHtml(k)}</code>`).join("\n");
+    const body = kws
+      .map((k, i) => {
+        const boards =
+          k.boards === "*"
+            ? "全部"
+            : k.boards.split(",").map(boardLabel).join("/");
+        const isExclude = k.keyword.startsWith("-");
+        const hits = isExclude ? "—" : `${k.hit_count}`;
+        return `${i + 1}. <code>${escapeHtml(k.keyword)}</code> | 📋 ${escapeHtml(boards)} | 🎯 命中 ${hits}`;
+      })
+      .join("\n");
     await ctx.reply(`📋 <b>你的关键词（${kws.length}）</b>\n${body}`, { parse_mode: "HTML" });
+  });
+
+  bot.command("boards", async (ctx) => {
+    const boards = getBoards();
+    const body = boards
+      .map((b, i) => `${i + 1}. <code>${b.slug}</code> → ${escapeHtml(b.label)}`)
+      .join("\n");
+    await ctx.reply(`🏷 <b>全部板块（${boards.length}）</b>\n${body}`, { parse_mode: "HTML" });
   });
 
   bot.command("pause", async (ctx) => {
@@ -238,6 +287,62 @@ export function createRuntime(config, store) {
     await ctx.reply(`广播完成：成功 ${ok}，失败 ${fail}（共 ${users.length}）`);
   });
 
+  // ---------- 板块选择 callback ----------
+  bot.callbackQuery(/^bd:(\d+):(.+)$/, async (ctx) => {
+    const kwId = Number(ctx.match[1]);
+    const action = ctx.match[2];
+    const kw = store.getKeywordById(kwId);
+    if (!kw || kw.user_id !== ctx.from.id) {
+      await ctx.answerCallbackQuery({ text: "无权限" });
+      return;
+    }
+    const boardList = getBoards();
+
+    if (action === "done") {
+      const boardsStr = store.getKeywordBoardsById(kwId);
+      const display =
+        boardsStr === "*"
+          ? "全部"
+          : boardsStr.split(",").map(boardLabel).join("、");
+      await ctx.answerCallbackQuery({ text: "已保存" });
+      await ctx.editMessageText(
+        `✅ 关键词 <code>${escapeHtml(kw.keyword)}</code>\n📋 板块：${escapeHtml(display)}`,
+        { parse_mode: "HTML" },
+      );
+      return;
+    }
+
+    if (action === "all") {
+      store.setKeywordBoardsById(kwId, "*");
+      await ctx.answerCallbackQuery({ text: "已设为全部板块" });
+      await ctx.editMessageReplyMarkup({ reply_markup: buildBoardKeyboard(kwId, "*", boardList) });
+      return;
+    }
+
+    // 切换单个板块
+    const allSlugs = boardList.map((b) => b.slug);
+    let boardsStr = store.getKeywordBoardsById(kwId);
+    let selected;
+    if (boardsStr === "*") {
+      // 当前全选 → 取消点击的那个
+      selected = new Set(allSlugs.filter((s) => s !== action));
+    } else {
+      selected = new Set(boardsStr.split(",").filter(Boolean));
+      if (selected.has(action)) selected.delete(action);
+      else selected.add(action);
+      if (allSlugs.every((s) => selected.has(s))) {
+        store.setKeywordBoardsById(kwId, "*");
+        await ctx.answerCallbackQuery({ text: "已全选" });
+        await ctx.editMessageReplyMarkup({ reply_markup: buildBoardKeyboard(kwId, "*", boardList) });
+        return;
+      }
+    }
+    const newBoards = [...selected].join(",");
+    store.setKeywordBoardsById(kwId, newBoards);
+    await ctx.answerCallbackQuery({});
+    await ctx.editMessageReplyMarkup({ reply_markup: buildBoardKeyboard(kwId, newBoards, boardList) });
+  });
+
   bot.on("message:text", async (ctx) => {
     await ctx.reply("未识别的命令。发送 /help 查看用法。");
   });
@@ -256,6 +361,7 @@ export function createRuntime(config, store) {
       `🔑 <b>关键词</b>: ${kws}`,
       `📝 <b>标题</b>: ${titleHtml}`,
     ];
+    if (item.board) lines.push(`📋 <b>板块</b>: ${escapeHtml(boardLabel(item.board))}`);
     if (item.snippet) lines.push(`📄 <b>摘要</b>: ${escapeHtml(item.snippet)}`);
     if (item.pubDate) lines.push(`🕒 <b>时间</b>: ${escapeHtml(item.pubDate)}`);
     if (item.categories?.length) lines.push(`🏷 <b>标签</b>: ${escapeHtml(item.categories.join(", "))}`);
@@ -290,10 +396,11 @@ export function createRuntime(config, store) {
     }
     running = true;
     try {
-      const items = await fetchAllFeeds(config.feeds, {
+      const { items, boards } = await fetchAllFeeds(config.feeds, {
         userAgent: config.userAgent,
         cookie: config.cookie,
       });
+      if (boards.length) setDiscoveredBoards(boards);
 
       let filtered = items;
       if (config.maxAgeHours > 0) {
@@ -324,8 +431,12 @@ export function createRuntime(config, store) {
           const text = itemMatchText(it);
           for (const u of users) {
             if (store.isSent(u.user_id, it.guid)) continue;
-            const hits = matchText(text, u.compiled);
+            const hits = matchText(text, it.board, u.compiled);
             if (!hits) continue;
+            // 命中计数（排除模式 "*" 不计数）
+            for (const h of hits) {
+              if (h !== "*") store.incrementHitCount(u.user_id, h);
+            }
             const ok = await pushToUser(u.user_id, it, hits);
             if (ok) {
               store.recordSent(u.user_id, it.guid, hits.join(","));
@@ -369,6 +480,7 @@ export function createRuntime(config, store) {
     { command: "users", description: "用户列表(管理员)" },
     { command: "broadcast", description: "全体广播(管理员)" },
     { command: "stats", description: "统计(管理员)" },
+    { command: "boards", description: "查看全部板块" },
   ];
 
   async function start() {
@@ -387,7 +499,7 @@ export function createRuntime(config, store) {
     }, config.checkIntervalSec * 1000);
     log.info(`定时检查已启动，间隔 ${config.checkIntervalSec} 秒`);
     await bot.start({
-      allowed_updates: ["message"],
+      allowed_updates: ["message", "callback_query"],
       onStart: (me) => log.info(`Bot 已上线：@${me.username}`),
     });
   }

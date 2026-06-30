@@ -62,6 +62,15 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_seen_time ON seen_posts(first_seen_at);
       CREATE INDEX IF NOT EXISTS idx_sent_time ON sent(sent_at);
     `);
+    // 迁移：为旧表添加 boards / hit_count 列
+    const cols = this.db.prepare("PRAGMA table_info(keywords)").all();
+    const colNames = new Set(cols.map((c) => c.name));
+    if (!colNames.has("boards")) {
+      this.db.exec("ALTER TABLE keywords ADD COLUMN boards TEXT NOT NULL DEFAULT '*'");
+    }
+    if (!colNames.has("hit_count")) {
+      this.db.exec("ALTER TABLE keywords ADD COLUMN hit_count INTEGER NOT NULL DEFAULT 0");
+    }
   }
 
   // ---------- meta ----------
@@ -112,13 +121,35 @@ export class Store {
   addKeyword(userId, keyword) {
     const now = Date.now();
     try {
-      this.db
+      const res = this.db
         .prepare("INSERT INTO keywords(user_id, keyword, created_at) VALUES(?, ?, ?)")
         .run(BigInt(userId), keyword, now);
-      return true;
+      return Number(res.lastInsertRowid);
     } catch {
-      return false; // 已存在
+      return null; // 已存在
     }
+  }
+  getKeywordById(kwId) {
+    return this.db
+      .prepare("SELECT id, user_id, keyword, boards, hit_count FROM keywords WHERE id = ?")
+      .get(kwId);
+  }
+  getKeywordBoardsById(kwId) {
+    const row = this.db.prepare("SELECT boards FROM keywords WHERE id = ?").get(kwId);
+    return row ? row.boards : "*";
+  }
+  setKeywordBoardsById(kwId, boards) {
+    this.db.prepare("UPDATE keywords SET boards = ? WHERE id = ?").run(boards, kwId);
+  }
+  incrementHitCount(userId, keyword) {
+    this.db
+      .prepare("UPDATE keywords SET hit_count = hit_count + 1 WHERE user_id = ? AND keyword = ?")
+      .run(BigInt(userId), keyword);
+  }
+  listKeywordsWithStats(userId) {
+    return this.db
+      .prepare("SELECT id, keyword, boards, hit_count FROM keywords WHERE user_id = ? ORDER BY id")
+      .all(BigInt(userId));
   }
   removeKeyword(userId, keyword) {
     const res = this.db
@@ -137,13 +168,13 @@ export class Store {
   }
 
   /**
-   * 返回所有「未暂停且有关键词」的用户及其关键词列表。
-   * [{ user_id, keywords: [...] }]
+   * 返回所有「未暂停且有关键词」的用户及其关键词（含板块）。
+   * [{ user_id, keywords: [{ keyword, boards }] }]
    */
   getActiveUsersWithKeywords() {
     const rows = this.db
       .prepare(
-        `SELECT u.user_id AS user_id, k.keyword AS keyword
+        `SELECT u.user_id AS user_id, k.keyword AS keyword, k.boards AS boards
            FROM users u
            JOIN keywords k ON k.user_id = u.user_id
           WHERE u.paused = 0
@@ -154,7 +185,7 @@ export class Store {
     for (const r of rows) {
       const uid = Number(r.user_id);
       if (!map.has(uid)) map.set(uid, []);
-      map.get(uid).push(r.keyword);
+      map.get(uid).push({ keyword: r.keyword, boards: r.boards });
     }
     return Array.from(map.entries()).map(([user_id, keywords]) => ({ user_id, keywords }));
   }

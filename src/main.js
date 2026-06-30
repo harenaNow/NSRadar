@@ -4,16 +4,21 @@ import { log } from "./logger.js";
 import { Store } from "./store.js";
 import { fetchAllFeeds, itemMatchText } from "./rss.js";
 import { compileKeywords, matchText } from "./matcher.js";
+import { setDiscoveredBoards } from "./boards.js";
 import { createRuntime } from "./bot.js";
 
 /** 一次性自检模式：抓取 RSS 并模拟匹配，不启动 Bot、不发送消息。 */
 async function runOnce(config, store) {
   log.info("== 一次性自检模式 (--once) ==");
   log.info(`RSS 源：${config.feeds.join(", ")}`);
-  const items = await fetchAllFeeds(config.feeds, {
+  const { items, boards } = await fetchAllFeeds(config.feeds, {
     userAgent: config.userAgent,
     cookie: config.cookie,
   });
+  if (boards.length) {
+    setDiscoveredBoards(boards);
+    log.info(`发现板块（${boards.length}）：${boards.join(", ")}`);
+  }
   log.info(`抓取到 ${items.length} 条帖子，最新 ${Math.min(10, items.length)} 条：`);
   for (const it of items.slice(0, 10)) {
     log.info(`  • ${it.title || "(无标题)"} | ${it.link}`);
@@ -28,7 +33,7 @@ async function runOnce(config, store) {
   for (const u of users) {
     const compiled = compileKeywords(u.keywords);
     for (const it of items) {
-      const hits = matchText(itemMatchText(it), compiled);
+      const hits = matchText(itemMatchText(it), it.board, compiled);
       if (hits) {
         matched++;
         log.info(`[匹配] 用户 ${u.user_id} <- "${it.title}" 命中 ${hits.join(",")}`);
