@@ -1,6 +1,6 @@
 # NSRadar — NodeSeek RSS 监控机器人
 
-监控 NodeSeek 论坛 RSS 订阅，通过关键词筛选后推送到 Telegram。支持多用户、正则匹配、排除词、暂停/恢复等管理功能。
+监控 NodeSeek 论坛 RSS 订阅，通过关键词筛选后推送到 Telegram。支持**板块选择**、多用户管理、正则匹配、排除词、命中统计、暂停/恢复等管理功能。
 
 ## ✨ 特性
 
@@ -173,6 +173,39 @@ npm run dev
 3. -广告 | 📋 全部 | 🎯 命中 —
 ```
 
+## 📁 项目结构
+
+```
+NSRadar/
+├── src/
+│   ├── main.js       # 入口：自检模式 / 启动 Bot
+│   ├── bot.js        # grammy Bot：命令、板块选择、推送逻辑
+│   ├── rss.js        # RSS 抓取与解析（rss-parser）
+│   ├── matcher.js    # 关键词匹配（支持板块过滤）
+│   ├── store.js      # SQLite 存储（用户、关键词、已见、已推送）
+│   ├── boards.js     # 板块定义与标签（自动发现）
+│   ├── config.js     # 配置加载与校验（.env / 环境变量）
+│   └── logger.js     # 日志模块
+├── .env.example      # 配置模板
+├── .gitignore
+├── package.json
+└── README.md
+```
+
+## 🔄 升级说明
+
+从旧版本升级时，数据库会自动迁移：
+
+```bash
+cd ~/NSRadar
+git pull
+npm install        # 若有新依赖
+npm start          # 启动时自动添加 boards/hit_count 列
+```
+
+- `boards` 列：已有关键词默认为 `*`（全部板块）
+- `hit_count` 列：已有关键词默认为 `0`
+
 ## 🛡 部署建议
 
 ### 使用 PM2（推荐）
@@ -220,9 +253,13 @@ systemctl start nsradar
 systemctl status nsradar
 ```
 
-### 使用 Docker（可选）
+### 使用 nohup（简单后台运行）
 
-如需容器化，可自行编写 `Dockerfile`（未提供）。
+```bash
+nohup npm start > nsradar.log 2>&1 &
+# 查看日志
+tail -f nsradar.log
+```
 
 ## ⚠️ 注意事项
 
