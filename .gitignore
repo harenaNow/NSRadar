@@ -1,0 +1,23 @@
+# dependencies
+node_modules/
+
+# runtime data
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# environment / secrets
+.env
+
+# logs
+logs/
+*.log
+
+# os / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
