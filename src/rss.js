@@ -4,7 +4,7 @@ import { log } from "./logger.js";
 const parser = new RSSParser({
   timeout: 15000,
   customFields: {
-    item: ["creator", "categories", "content"],
+    item: ["creator", "categories", "content", "description"],
   },
 });
 
@@ -32,7 +32,13 @@ function normalizeItem(item) {
   const guid = String(item.guid || item.id || item.link || item.title || "").trim();
   const title = stripHtml(item.title || "");
   const link = String(item.link || "").trim();
-  const contentRaw = item.contentSnippet || item.summary || item.content || "";
+  // rss-parser 默认提取 content/contentSnippet；NodeSeek 可能用 description
+  const contentRaw =
+    item.contentSnippet ||
+    item.content ||
+    item.summary ||
+    item.description ||
+    "";
   const content = stripHtml(contentRaw);
   const categories = Array.isArray(item.categories)
     ? item.categories.map((c) => (typeof c === "string" ? c : c?.term || "")).filter(Boolean)

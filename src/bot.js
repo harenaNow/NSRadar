@@ -348,6 +348,18 @@ export function createRuntime(config, store) {
   });
 
   // ---------- 推送 ----------
+  function formatDate(dateStr) {
+    if (!dateStr) return "";
+    const ts = Date.parse(dateStr);
+    if (!Number.isFinite(ts)) return escapeHtml(dateStr);
+    const d = new Date(ts);
+    const month = d.getMonth() + 1;
+    const day = d.getDate();
+    const hour = String(d.getHours()).padStart(2, "0");
+    const min = String(d.getMinutes()).padStart(2, "0");
+    return `${month}/${day} ${hour}:${min}`;
+  }
+
   function formatPush(item, hits) {
     const kws = hits
       .map((h) => (h === "*" ? "全部（排除模式）" : escapeHtml(h)))
@@ -362,9 +374,13 @@ export function createRuntime(config, store) {
       `📝 <b>标题</b>: ${titleHtml}`,
     ];
     if (item.board) lines.push(`📋 <b>板块</b>: ${escapeHtml(boardLabel(item.board))}`);
-    if (item.snippet) lines.push(`📄 <b>摘要</b>: ${escapeHtml(item.snippet)}`);
-    if (item.pubDate) lines.push(`🕒 <b>时间</b>: ${escapeHtml(item.pubDate)}`);
-    if (item.categories?.length) lines.push(`🏷 <b>标签</b>: ${escapeHtml(item.categories.join(", "))}`);
+    if (item.snippet) {
+      // 截断到 200 字避免刷屏
+      const snippet = item.snippet.length > 200 ? item.snippet.slice(0, 200) + "…" : item.snippet;
+      lines.push(`📄 ${escapeHtml(snippet)}`);
+    }
+    if (item.author) lines.push(`👤 ${escapeHtml(item.author)}`);
+    if (item.pubDate) lines.push(`🕒 ${formatDate(item.pubDate)}`);
     return lines.join("\n");
   }
 
