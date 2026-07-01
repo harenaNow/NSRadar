@@ -364,25 +364,17 @@ export function createRuntime(config, store) {
     const kws = hits
       .map((h) => (h === "*" ? "全部（排除模式）" : escapeHtml(h)))
       .join("、");
-    const titleHtml = item.link
-      ? `<a href="${escapeHtml(item.link)}">${escapeHtml(item.title || "(无标题)")}</a>`
-      : escapeHtml(item.title || "(无标题)");
     
-    // 关键词和板块放在一行
+    // 标题作为超链接，TG 会自动抓取网页预览
+    const titleLink = item.link ? `<a href="${escapeHtml(item.link)}">${escapeHtml(item.title || "(无标题)")}</a>` : escapeHtml(item.title || "(无标题)");
+    
     const boardStr = item.board ? escapeHtml(boardLabel(item.board)) : "";
-    const keywordLine = boardStr ? `🔑 ${kws} | 📋 ${boardStr}` : `🔑 ${kws}`;
     
     const lines = [
-      "🛰 <b>NSRadar 命中</b>",
-      "",
-      keywordLine,
-      `📝 ${titleHtml}`,
+      `${titleLink}`,
+      `⚡️⚡️️ 关键词： ${kws}`,
     ];
-    if (item.snippet) {
-      // 截断到 200 字避免刷屏
-      const snippet = item.snippet.length > 200 ? item.snippet.slice(0, 200) + "…" : item.snippet;
-      lines.push(`📄 ${escapeHtml(snippet)}`);
-    }
+    if (boardStr) lines.push(`🏷️🏷️🏷️ 板   块： ${boardStr}`);
     return lines.join("\n");
   }
 
